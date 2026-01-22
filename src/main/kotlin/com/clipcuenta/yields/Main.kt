@@ -159,7 +159,7 @@ fun main() {
                 println("------------------------------------")
 
                 try {
-                    client.putItem(putRequest)
+                    //client.putItem(putRequest)
                     println("✅ Transaction created successfully")
                 } catch (e: Exception) {
                     System.err.println("❌ Failed to write transaction: ${e.message}")

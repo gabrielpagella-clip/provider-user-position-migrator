@@ -1,6 +1,6 @@
 # provider-user-position-migrator
 
-Utility to migrate COMPLETED provider user positions to transactions for a user
+Utility to migrate COMPLETED ProviderUserPositions entities to Transaction entities for a user
 
 Change these values for the user you want to migrate
 

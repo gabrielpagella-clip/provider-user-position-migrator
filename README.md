@@ -15,8 +15,8 @@ Run the following commands in your terminal to set the AWS environment variables
     export AWS_SECRET_ACCESS_KEY="ABC123"
     export AWS_SESSION_TOKEN="ABC123"
 
-Build & Run:
+Build & Run (repeate after every change in code or property):
 
-    mvn clean package 
+    mvn clean package
 
     java -jar target/provider-user-position-migrator-1.0.0.jar

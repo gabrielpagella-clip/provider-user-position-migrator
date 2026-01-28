@@ -6,10 +6,39 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest
+import java.io.File
 import java.math.BigDecimal
 import java.time.Instant
+import java.util.Properties
 import java.util.UUID
 import kotlin.random.Random
+
+private fun loadConfig(): Properties {
+    val props = Properties()
+    val configFile = File("config.properties")
+    if (!configFile.exists()) {
+        throw IllegalStateException("config.properties file not found")
+    }
+    configFile.inputStream().use { props.load(it) }
+    return props
+}
+
+private val config = loadConfig()
+
+val tableName = config.getProperty("table_name")
+    ?: throw IllegalStateException("table_name not found in config.properties")
+val userId = config.getProperty("user_id")
+    ?: throw IllegalStateException("user_id not found in config.properties")
+val walletSavingId = config.getProperty("wallet_saving_id")
+    ?: throw IllegalStateException("wallet_saving_id not found in config.properties")
+val merchantId = UUID.fromString(
+    config.getProperty("merchant_id")
+        ?: throw IllegalStateException("merchant_id not found in config.properties")
+)
+val walletAccountId = UUID.fromString(
+    config.getProperty("wallet_account_id")
+        ?: throw IllegalStateException("wallet_account_id not found in config.properties")
+)
 
 private fun avS(v: String): AttributeValue = AttributeValue.builder().s(v).build()
 
@@ -57,13 +86,7 @@ private fun Transaction.toPutItemRequest(tableName: String): PutItemRequest =
         .conditionExpression("attribute_not_exists(table_pk) AND attribute_not_exists(table_sk)")
         .build()
 
-val tableName = "yields-transaction-api-dev-transactions"
-
 fun main() {
-    val userId = "d5d45294-6be0-4fe2-8190-00c70b8291c8"
-    val walletSavingId = "f9cd28ad-b5cb-46ed-aadd-bceddbf785c6"
-    val merchantId = UUID.fromString("5399b8c1-d949-404e-99c3-25a7b8e82486")
-    val walletAccountId = UUID.fromString("bb85a2a4-8d52-4e55-b0e8-f79209fe7c49")
 
     val region = Region.US_WEST_2
     val providerName = "KUSPIT"
@@ -81,6 +104,9 @@ fun main() {
 
     var lastKey: Map<String, AttributeValue>? = null
     var count = 0
+    var transactionsCreated = 0
+    var transactionsSkipped = 0
+    var transactionsFailed = 0
 
     do {
         val req = QueryRequest.builder()
@@ -151,18 +177,27 @@ fun main() {
                 println("---- TRANSACTION (DOMAIN) ----")
                 println(tx)
 
+                // Check if transaction already exists
+                if (transactionExists(client, tx.walletSavingId, tx.createdAt, tx.type)) {
+                    println("⚠️  Transaction already exists (created_at=${tx.createdAt}, type=${tx.type}), skipping...")
+                    transactionsSkipped++
+                    return@forEach
+                }
+
                 val putRequest = tx.toPutItemRequest(tableName)
 
-                println("---- PUT ITEM REQUEST (DRY RUN) ----")
+                println("---- PUT ITEM REQUEST ----")
                 println("tableName=${putRequest.tableName()}")
                 println("item=${putRequest.item()}")
                 println("------------------------------------")
 
                 try {
-                    //client.putItem(putRequest)
+                    client.putItem(putRequest)
                     println("✅ Transaction created successfully")
+                    transactionsCreated++
                 } catch (e: Exception) {
                     System.err.println("❌ Failed to write transaction: ${e.message}")
+                    transactionsFailed++
                     // Continue processing other transactions
                 }
 
@@ -174,7 +209,10 @@ fun main() {
         lastKey = resp.lastEvaluatedKey().takeIf { it != null && it.isNotEmpty() }
     } while (lastKey != null)
 
-    println("Total items: $count")
+    println("Total positions processed: $count")
+    println("Transactions created: $transactionsCreated")
+    println("Transactions skipped (already exist): $transactionsSkipped")
+    println("Transactions failed: $transactionsFailed")
     client.close()
 }
 
@@ -220,6 +258,30 @@ fun existsEntityByMerchantIdAndTransactionReference(dynamoDbClient: DynamoDbClie
             .keyConditionExpression(keyConditionExpression)
             .expressionAttributeValues(expressionAttributeValues)
             .build()
+
+    val queryResponse = dynamoDbClient.query(request)
+    return queryResponse.items().isNotEmpty()
+}
+
+fun transactionExists(
+    dynamoDbClient: DynamoDbClient,
+    walletSavingId: String,
+    createdAt: Instant,
+    type: String
+): Boolean {
+    val request = QueryRequest.builder()
+        .tableName(tableName)
+        .indexName("createdat-lsi")
+        .keyConditionExpression("table_pk = :pk AND created_at = :createdAt")
+        .filterExpression("#type = :type")
+        .expressionAttributeNames(mapOf("#type" to "type"))
+        .expressionAttributeValues(mapOf(
+            ":pk" to avS("WALLET_SAVING#$walletSavingId"),
+            ":createdAt" to avS(createdAt.toString()),
+            ":type" to avS(type)
+        ))
+        .limit(1)
+        .build()
 
     val queryResponse = dynamoDbClient.query(request)
     return queryResponse.items().isNotEmpty()

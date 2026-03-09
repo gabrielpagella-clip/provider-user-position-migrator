@@ -6,6 +6,7 @@ import software.amazon.awssdk.services.dynamodb.model.AttributeValue
 import software.amazon.awssdk.services.dynamodb.model.DynamoDbException
 import software.amazon.awssdk.services.dynamodb.model.PutItemRequest
 import software.amazon.awssdk.services.dynamodb.model.QueryRequest
+import software.amazon.awssdk.services.dynamodb.model.UpdateItemRequest
 import java.io.File
 import java.math.BigDecimal
 import java.time.Instant
@@ -130,10 +131,11 @@ fun main() {
         val resp = client.query(req)
         println("Page => returnedCount=${resp.count()} scannedCount=${resp.scannedCount()} hasLastKey=${resp.lastEvaluatedKey()?.isNotEmpty() == true}")
 
-
         for (item in resp.items()) {
             count++
 
+            val positionPk = avSToString(item, "table_pk") ?: continue
+            val positionSk = avSToString(item, "table_sk") ?: continue
             val interestIn = avNToBigDecimal(item, "interest_in")
             val interestOut = avNToBigDecimal(item, "interest_out")
             val createdAt = avSToInstant(item, "created_at")
@@ -195,6 +197,8 @@ fun main() {
                     client.putItem(putRequest)
                     println("✅ Transaction created successfully")
                     transactionsCreated++
+                    updateProviderUserPositionReferenceId(client, positionPk, positionSk, tx.id)
+                    println("✅ Provider user position updated with reference_id=${tx.id}")
                 } catch (e: Exception) {
                     System.err.println("❌ Failed to write transaction: ${e.message}")
                     transactionsFailed++
@@ -261,6 +265,27 @@ fun existsEntityByMerchantIdAndTransactionReference(dynamoDbClient: DynamoDbClie
 
     val queryResponse = dynamoDbClient.query(request)
     return queryResponse.items().isNotEmpty()
+}
+
+fun updateProviderUserPositionReferenceId(
+    dynamoDbClient: DynamoDbClient,
+    positionPk: String,
+    positionSk: String,
+    transactionId: UUID
+) {
+    val request = UpdateItemRequest.builder()
+        .tableName(tableName)
+        .key(mapOf(
+            "table_pk" to avS(positionPk),
+            "table_sk" to avS(positionSk)
+        ))
+        .updateExpression("SET reference_id = :transactionId")
+        .expressionAttributeValues(mapOf(
+            ":transactionId" to avS(transactionId.toString())
+        ))
+        .build()
+
+    dynamoDbClient.updateItem(request)
 }
 
 fun transactionExists(
